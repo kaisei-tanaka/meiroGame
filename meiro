@@ -1,0 +1,522 @@
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.GridLayout;
+import java.awt.Point;
+import java.awt.RenderingHints;
+import java.awt.event.ActionEvent;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.Stack;
+
+import javax.swing.AbstractAction;
+import javax.swing.BorderFactory;
+import javax.swing.InputMap;
+import javax.swing.ActionMap;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.KeyStroke;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+
+public class meiro extends JPanel {
+    private static final int ROW = 21;
+    private static final int COL = 21;
+    private static final int CELL = 30;
+
+    private static final int PATH = 0;
+    private static final int WALL = 1;
+    private static final int GOAL = 2;
+
+    private static final int[] TIME_STAGES = {30, 20, 10};
+
+    private final GameMode mode;
+
+    public meiro(GameMode mode) {
+        this.mode = mode;
+        setLayout(new GridLayout(1, 1));
+
+        if (mode == GameMode.SOLO) {
+            add(new SoloPanel());
+        } else {
+            add(new VersusPanel());
+        }
+    }
+
+    private static int timeLimitForClears(int clears) {
+        int stage = clears / 5; // 0.. : every 5 clears
+        if (stage < 0) stage = 0;
+        if (stage >= TIME_STAGES.length) stage = TIME_STAGES.length - 1;
+        return TIME_STAGES[stage];
+    }
+
+    private static void installArrowKeyBindings(JPanel target, Runnable up, Runnable down, Runnable left, Runnable right) {
+        InputMap im = target.getInputMap(JPanel.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap am = target.getActionMap();
+
+        im.put(KeyStroke.getKeyStroke("UP"), "moveUp");
+        im.put(KeyStroke.getKeyStroke("DOWN"), "moveDown");
+        im.put(KeyStroke.getKeyStroke("LEFT"), "moveLeft");
+        im.put(KeyStroke.getKeyStroke("RIGHT"), "moveRight");
+
+        am.put("moveUp", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { up.run(); }
+        });
+        am.put("moveDown", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { down.run(); }
+        });
+        am.put("moveLeft", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { left.run(); }
+        });
+        am.put("moveRight", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { right.run(); }
+        });
+    }
+
+    private static int[][] generateMaze(Random rand) {
+        int[][] maze = new int[ROW][COL];
+        for (int y = 0; y < ROW; y++) {
+            for (int x = 0; x < COL; x++) {
+                maze[y][x] = WALL;
+            }
+        }
+
+        Stack<int[]> stack = new Stack<>();
+        int sx = 1, sy = 1;
+        maze[sy][sx] = PATH;
+        stack.push(new int[]{sx, sy});
+
+        int[][] dir = {{2, 0}, {-2, 0}, {0, 2}, {0, -2}};
+
+        while (!stack.isEmpty()) {
+            int[] cur = stack.pop();
+            int cx = cur[0];
+            int cy = cur[1];
+
+            // Fisher-Yates shuffle
+            for (int i = dir.length - 1; i > 0; i--) {
+                int r = rand.nextInt(i + 1);
+                int[] tmp = dir[i];
+                dir[i] = dir[r];
+                dir[r] = tmp;
+            }
+
+            for (int[] d : dir) {
+                int nx = cx + d[0];
+                int ny = cy + d[1];
+                if (nx > 0 && ny > 0 && nx < COL - 1 && ny < ROW - 1) {
+                    if (maze[ny][nx] == WALL) {
+                        maze[ny][nx] = PATH;
+                        maze[cy + d[1] / 2][cx + d[0] / 2] = PATH;
+                        stack.push(new int[]{nx, ny});
+                    }
+                }
+            }
+        }
+
+        maze[ROW - 2][COL - 2] = GOAL;
+        return maze;
+    }
+
+    private static List<Point> shortestPath(int[][] maze, int sx, int sy, int gx, int gy) {
+        int[][] prevX = new int[ROW][COL];
+        int[][] prevY = new int[ROW][COL];
+        for (int y = 0; y < ROW; y++) {
+            for (int x = 0; x < COL; x++) {
+                prevX[y][x] = -1;
+                prevY[y][x] = -1;
+            }
+        }
+
+        ArrayDeque<Point> q = new ArrayDeque<>();
+        q.add(new Point(sx, sy));
+        prevX[sy][sx] = sx;
+        prevY[sy][sx] = sy;
+
+        int[] dx = {1, -1, 0, 0};
+        int[] dy = {0, 0, 1, -1};
+
+        while (!q.isEmpty()) {
+            Point p = q.removeFirst();
+            if (p.x == gx && p.y == gy) break;
+
+            for (int i = 0; i < 4; i++) {
+                int nx = p.x + dx[i];
+                int ny = p.y + dy[i];
+                if (nx < 0 || ny < 0 || nx >= COL || ny >= ROW) continue;
+                if (maze[ny][nx] == WALL) continue;
+                if (prevX[ny][nx] != -1) continue;
+                prevX[ny][nx] = p.x;
+                prevY[ny][nx] = p.y;
+                q.add(new Point(nx, ny));
+            }
+        }
+
+        if (prevX[gy][gx] == -1) return java.util.Collections.emptyList();
+
+        ArrayList<Point> reversed = new ArrayList<>();
+        int cx = gx;
+        int cy = gy;
+        reversed.add(new Point(cx, cy));
+        while (!(cx == sx && cy == sy)) {
+            int px = prevX[cy][cx];
+            int py = prevY[cy][cx];
+            cx = px;
+            cy = py;
+            reversed.add(new Point(cx, cy));
+        }
+
+        ArrayList<Point> path = new ArrayList<>(reversed.size());
+        for (int i = reversed.size() - 1; i >= 0; i--) {
+            path.add(reversed.get(i));
+        }
+        return path;
+    }
+
+    private enum GameMode { SOLO, VERSUS }
+
+    private static final class MazeBoard extends JPanel {
+        private final String title;
+        private final Color playerColor;
+        private int[][] maze;
+        private int playerX = 1;
+        private int playerY = 1;
+
+        MazeBoard(String title, Color playerColor) {
+            this.title = title;
+            this.playerColor = playerColor;
+            setPreferredSize(new Dimension(COL * CELL, ROW * CELL));
+            setBackground(Color.WHITE);
+            setBorder(BorderFactory.createLineBorder(new Color(30, 30, 30), 2));
+        }
+
+        void reset(int[][] maze) {
+            this.maze = maze;
+            this.playerX = 1;
+            this.playerY = 1;
+            repaint();
+        }
+
+        int[][] getMaze() { return maze; }
+        int getPlayerX() { return playerX; }
+        int getPlayerY() { return playerY; }
+
+        boolean movePlayer(int dx, int dy) {
+            int nx = playerX + dx;
+            int ny = playerY + dy;
+            if (nx < 0 || ny < 0 || nx >= COL || ny >= ROW) return false;
+            if (maze[ny][nx] == WALL) return false;
+            playerX = nx;
+            playerY = ny;
+            repaint();
+            return true;
+        }
+
+        boolean atGoal() {
+            return maze != null && maze[playerY][playerX] == GOAL;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (maze == null) return;
+
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            for (int y = 0; y < ROW; y++) {
+                for (int x = 0; x < COL; x++) {
+                    if (maze[y][x] == WALL) g2.setColor(Color.BLACK);
+                    else if (maze[y][x] == GOAL) g2.setColor(new Color(210, 40, 40));
+                    else g2.setColor(Color.WHITE);
+
+                    g2.fillRect(x * CELL, y * CELL, CELL, CELL);
+                    g2.setColor(new Color(160, 160, 160));
+                    g2.drawRect(x * CELL, y * CELL, CELL, CELL);
+                }
+            }
+
+            // player
+            g2.setColor(playerColor);
+            g2.fillOval(playerX * CELL + 5, playerY * CELL + 5, CELL - 10, CELL - 10);
+            g2.setColor(new Color(20, 20, 20));
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawOval(playerX * CELL + 5, playerY * CELL + 5, CELL - 10, CELL - 10);
+
+            // title overlay
+            g2.setFont(new Font("SansSerif", Font.BOLD, 14));
+            int pad = 6;
+            g2.setColor(new Color(255, 255, 255, 190));
+            g2.fillRoundRect(pad, pad, 140, 22, 10, 10);
+            g2.setColor(new Color(30, 30, 30));
+            g2.drawString(title, pad + 10, pad + 16);
+
+            g2.dispose();
+        }
+    }
+
+    private final class SoloPanel extends JPanel {
+        private final Random rand = new Random();
+        private final MazeBoard board = new MazeBoard("YOU", new Color(40, 90, 220));
+        private final JPanel info = new JPanel(null);
+        private final JLabel infoLabel = new JLabel("", SwingConstants.LEFT);
+
+        private Timer timer;
+        private int timeLeft;
+        private int clears;
+
+        SoloPanel() {
+            setLayout(null);
+            setBackground(new Color(245, 245, 245));
+
+            int infoWidth = 220;
+            int w = COL * CELL + infoWidth;
+            int h = ROW * CELL;
+            setPreferredSize(new Dimension(w, h));
+
+            board.setBounds(0, 0, COL * CELL, ROW * CELL);
+            add(board);
+
+            info.setBounds(COL * CELL, 0, infoWidth, ROW * CELL);
+            info.setBackground(new Color(230, 230, 230));
+            info.setBorder(BorderFactory.createMatteBorder(0, 2, 0, 0, new Color(30, 30, 30)));
+            add(info);
+
+            infoLabel.setBounds(14, 14, infoWidth - 28, ROW * CELL - 28);
+            infoLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
+            info.add(infoLabel);
+
+            installArrowKeyBindings(this,
+                    () -> onMove(0, -1),
+                    () -> onMove(0, 1),
+                    () -> onMove(-1, 0),
+                    () -> onMove(1, 0));
+
+            resetRound(false);
+        }
+
+        private void updateInfo() {
+            int limit = timeLimitForClears(clears);
+            infoLabel.setText("<html>"
+                    + "<div style='font-size:16px;'>== Info ==</div>"
+                    + "<div style='margin-top:10px;'>クリア回数: " + clears + "</div>"
+                    + "<div>制限時間: " + limit + " 秒</div>"
+                    + "<div style='margin-top:10px;'>残り時間: " + timeLeft + " 秒</div>"
+                    + "<div style='margin-top:18px; font-size:12px;'>"
+                    + "ルール: 5回クリアごとに制限時間が短くなる<br/>"
+                    + "(30秒 → 20秒 → 10秒)"
+                    + "</div>"
+                    + "</html>");
+        }
+
+        private void resetRound(boolean showMessage) {
+            int limit = timeLimitForClears(clears);
+            board.reset(generateMaze(rand));
+            startTimer(limit);
+            if (showMessage) repaint();
+        }
+
+        private void startTimer(int limitSeconds) {
+            timeLeft = limitSeconds;
+            if (timer != null) timer.stop();
+            timer = new Timer(1000, e -> {
+                timeLeft--;
+                if (timeLeft <= 0) {
+                    timer.stop();
+                    JOptionPane.showMessageDialog(SoloPanel.this, "時間切れ！迷路をリセットします。");
+                    resetRound(true);
+                    return;
+                }
+                updateInfo();
+                repaint();
+            });
+            timer.start();
+            updateInfo();
+        }
+
+        private void onMove(int dx, int dy) {
+            if (timer == null || !timer.isRunning()) return;
+            boolean moved = board.movePlayer(dx, dy);
+            if (!moved) return;
+            if (board.atGoal()) {
+                timer.stop();
+                clears++;
+                JOptionPane.showMessageDialog(SoloPanel.this, "ゴール！次の迷路へ。");
+                resetRound(true);
+            } else {
+                updateInfo();
+            }
+        }
+    }
+
+    private final class VersusPanel extends JPanel {
+        private final Random rand = new Random();
+        private final MazeBoard human = new MazeBoard("YOU", new Color(40, 90, 220));
+        private final MazeBoard ai = new MazeBoard("AI", new Color(40, 170, 90));
+        private final JLabel header = new JLabel("", SwingConstants.CENTER);
+
+        private Timer roundTimer;
+        private Timer aiTimer;
+        private int timeLeft;
+        private int roundsCleared;
+
+        private List<Point> aiPath = java.util.Collections.emptyList();
+        private int aiPathIndex = 0;
+
+        VersusPanel() {
+            setLayout(null);
+            setBackground(new Color(245, 245, 245));
+
+            int gap = 14;
+            int headerH = 52;
+            int boardsW = COL * CELL * 2 + gap;
+            int w = boardsW + gap * 2;
+            int h = headerH + ROW * CELL + gap * 2;
+            setPreferredSize(new Dimension(w, h));
+
+            header.setBounds(0, 0, w, headerH);
+            header.setOpaque(true);
+            header.setBackground(new Color(25, 25, 25));
+            header.setForeground(Color.WHITE);
+            header.setFont(new Font("SansSerif", Font.BOLD, 16));
+            add(header);
+
+            human.setBounds(gap, headerH + gap, COL * CELL, ROW * CELL);
+            ai.setBounds(gap + COL * CELL + gap, headerH + gap, COL * CELL, ROW * CELL);
+            add(human);
+            add(ai);
+
+            installArrowKeyBindings(this,
+                    () -> onHumanMove(0, -1),
+                    () -> onHumanMove(0, 1),
+                    () -> onHumanMove(-1, 0),
+                    () -> onHumanMove(1, 0));
+
+            resetRound("AI対戦スタート！");
+        }
+
+        private void updateHeader() {
+            int limit = timeLimitForClears(roundsCleared);
+            header.setText("クリア回数: " + roundsCleared + "   |   制限時間: " + limit + " 秒   |   残り時間: " + timeLeft + " 秒");
+        }
+
+        private void resetRound(String message) {
+            if (roundTimer != null) roundTimer.stop();
+            if (aiTimer != null) aiTimer.stop();
+
+            if (message != null && !message.isEmpty()) {
+                JOptionPane.showMessageDialog(VersusPanel.this, message);
+            }
+
+            int limit = timeLimitForClears(roundsCleared);
+            timeLeft = limit;
+
+            int[][] maze = generateMaze(rand);
+            human.reset(maze);
+            ai.reset(maze);
+
+            prepareAiPath();
+            startRoundTimer();
+            startAiTimer();
+            updateHeader();
+            repaint();
+        }
+
+        private void startRoundTimer() {
+            roundTimer = new Timer(1000, e -> {
+                timeLeft--;
+                if (timeLeft <= 0) {
+                    roundTimer.stop();
+                    if (aiTimer != null) aiTimer.stop();
+                    JOptionPane.showMessageDialog(VersusPanel.this, "時間切れ！次のラウンドへ。");
+                    resetRound(null);
+                    return;
+                }
+                updateHeader();
+            });
+            roundTimer.start();
+        }
+
+        private void prepareAiPath() {
+            int gx = COL - 2;
+            int gy = ROW - 2;
+            List<Point> path = shortestPath(ai.getMaze(), 1, 1, gx, gy);
+            if (path.isEmpty()) {
+                aiPath = java.util.Collections.emptyList();
+                aiPathIndex = 0;
+                return;
+            }
+            // path includes start; AI will follow from index 1
+            aiPath = path;
+            aiPathIndex = 1;
+        }
+
+        private void startAiTimer() {
+            aiTimer = new Timer(120, e -> {
+                if (aiPath.isEmpty()) return;
+                if (aiPathIndex >= aiPath.size()) return;
+
+                Point next = aiPath.get(aiPathIndex++);
+                int dx = next.x - ai.getPlayerX();
+                int dy = next.y - ai.getPlayerY();
+                ai.movePlayer(dx, dy);
+
+                if (ai.atGoal()) {
+                    if (roundTimer != null) roundTimer.stop();
+                    aiTimer.stop();
+                    roundsCleared++;
+                    JOptionPane.showMessageDialog(VersusPanel.this, "AIが先にゴール！次のラウンドへ。");
+                    resetRound(null);
+                }
+            });
+            aiTimer.start();
+        }
+
+        private void onHumanMove(int dx, int dy) {
+            if (roundTimer == null || !roundTimer.isRunning()) return;
+            boolean moved = human.movePlayer(dx, dy);
+            if (!moved) return;
+            if (human.atGoal()) {
+                if (roundTimer != null) roundTimer.stop();
+                if (aiTimer != null) aiTimer.stop();
+                roundsCleared++;
+                JOptionPane.showMessageDialog(VersusPanel.this, "あなたの勝ち！次のラウンドへ。");
+                resetRound(null);
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> {
+            Object[] options = {"1人プレイ", "AI対戦"};
+            int selected = JOptionPane.showOptionDialog(
+                    null,
+                    "モードを選んでください",
+                    "Maze Game",
+                    JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    options,
+                    options[0]);
+
+            if (selected != 0 && selected != 1) return;
+
+            GameMode mode = (selected == 0) ? GameMode.SOLO : GameMode.VERSUS;
+
+            JFrame frame = new JFrame(mode == GameMode.SOLO ? "Maze Game (Solo)" : "Maze Game (Versus)");
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setContentPane(new meiro(mode));
+            frame.pack();
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+        });
+    }
+}
